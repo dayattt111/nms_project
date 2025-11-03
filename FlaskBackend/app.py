@@ -7,5 +7,6 @@ def home():
     return "Flask backend running successfully!"
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
-    # app.run(debug=True, port)
+    app.run(debug=True, port=5003)
+
+    # app.run(debug=True, port=5001)
