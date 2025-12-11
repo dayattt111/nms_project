@@ -8,19 +8,20 @@ CREATE TABLE IF NOT EXISTS devices (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     ip_address VARCHAR(50) NOT NULL UNIQUE,
-    device_type ENUM('router', 'switch', 'server', 'firewall', 'other') DEFAULT 'router',
+    device_type ENUM('router', 'switch', 'server', 'firewall', 'wifi_ap', 'other') DEFAULT 'router',
     status ENUM('up', 'down', 'unknown') DEFAULT 'unknown',
     last_checked DATETIME,
-    zabbix_hostid VARCHAR(50),
     snmp_community VARCHAR(50) DEFAULT 'public',
     interface_index INT DEFAULT 2,
     location VARCHAR(255),
     description TEXT,
+    vendor VARCHAR(100),
+    model VARCHAR(100),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_ip (ip_address),
     INDEX idx_status (status),
-    INDEX idx_zabbix (zabbix_hostid)
+    INDEX idx_type (device_type)
 );
 
 -- Table untuk menyimpan history bandwidth
@@ -57,16 +58,17 @@ CREATE TABLE IF NOT EXISTS alert_history (
     INDEX idx_created (created_at)
 );
 
--- Table untuk menyimpan Zabbix trigger yang sudah diproses
-CREATE TABLE IF NOT EXISTS zabbix_triggers_processed (
+-- Table untuk menyimpan WiFi client history
+CREATE TABLE IF NOT EXISTS wifi_client_history (
     id INT AUTO_INCREMENT PRIMARY KEY,
-    trigger_id VARCHAR(50) NOT NULL UNIQUE,
-    description TEXT,
-    priority INT,
-    last_processed DATETIME,
+    device_id INT NOT NULL,
+    client_count INT DEFAULT 0,
+    avg_signal_strength DECIMAL(5, 2),
+    timestamp DATETIME NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_trigger (trigger_id),
-    INDEX idx_last_processed (last_processed)
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
+    INDEX idx_device_time (device_id, timestamp),
+    INDEX idx_timestamp (timestamp)
 );
 
 -- Table untuk konfigurasi threshold per device
@@ -84,10 +86,11 @@ CREATE TABLE IF NOT EXISTS device_thresholds (
 );
 
 -- Insert sample data
-INSERT INTO devices (name, ip_address, device_type, status, location, description) VALUES
-('Router Utama', '192.168.1.1', 'router', 'unknown', 'Data Center', 'Router utama untuk koneksi internet'),
-('Switch Core', '192.168.1.2', 'switch', 'unknown', 'Data Center', 'Switch core untuk jaringan internal'),
-('Server Web', '192.168.1.10', 'server', 'unknown', 'Server Room', 'Web server production');
+INSERT INTO devices (name, ip_address, device_type, status, location, description, vendor) VALUES
+('Router Utama', '192.168.1.1', 'router', 'unknown', 'Data Center', 'Router utama untuk koneksi internet', 'MikroTik'),
+('WiFi AP Office', '192.168.1.2', 'wifi_ap', 'unknown', 'Office Floor 1', 'Access Point untuk WiFi kantor', 'Ubiquiti'),
+('WiFi AP Warehouse', '192.168.1.3', 'wifi_ap', 'unknown', 'Warehouse', 'Access Point untuk WiFi gudang', 'TP-Link'),
+('Switch Core', '192.168.1.10', 'switch', 'unknown', 'Data Center', 'Switch core untuk jaringan internal', 'Cisco');
 
 -- Insert default thresholds
 INSERT INTO device_thresholds (device_id, bandwidth_high_mbps, bandwidth_low_mbps) 

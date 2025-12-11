@@ -131,12 +131,32 @@ def send_zabbix_trigger_alert(trigger_data):
     return send_alert(message)
 
 
+def send_wifi_client_alert(device_name, ip_address, current_clients, avg_clients):
+    """Alert untuk perubahan jumlah client WiFi"""
+    message = f"""
+📡 <b>WIFI CLIENT ALERT</b> 📡
+
+📌 Device: <b>{device_name}</b>
+🌐 IP Address: <code>{ip_address}</code>
+⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+👥 <b>Connected Clients:</b>
+📊 Current: <b>{current_clients}</b> clients
+📈 Average: <b>{avg_clients}</b> clients
+
+⚠️ Client count dropped significantly!
+🔍 Please check WiFi connectivity
+"""
+    return send_alert(message)
+
+
 def send_monitoring_summary(summary_data):
     """Kirim ringkasan monitoring periodik"""
     total_devices = summary_data.get('total_devices', 0)
     up_devices = summary_data.get('up_devices', 0)
     down_devices = summary_data.get('down_devices', 0)
     avg_bandwidth = summary_data.get('avg_bandwidth', 0)
+    wifi_clients = summary_data.get('total_wifi_clients', 0)
     
     message = f"""
 📊 <b>MONITORING SUMMARY</b>
@@ -150,6 +170,7 @@ def send_monitoring_summary(summary_data):
 
 🌐 <b>Network:</b>
 📊 Avg Bandwidth: <b>{avg_bandwidth} Mbps</b>
+📡 WiFi Clients: <b>{wifi_clients}</b> connected
 
 {'✅ Semua sistem normal' if down_devices == 0 else '⚠️ Ada device yang down!'}
 """

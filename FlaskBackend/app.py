@@ -1,27 +1,27 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime
+from datetime import datetime, timedelta
 from ping3 import ping
 import mysql.connector
 import os
 from dotenv import load_dotenv
 import requests
 from pysnmp.hlapi import *
+import time
 
 # Import routes
 from routes.devices import devices_bp
-from routes.monitoring import monitoring_bp
 
 # Import services
-from service.network_service import check_devices, get_interface_bandwidth
+from service.network_service import check_devices, get_interface_bandwidth, get_wifi_clients
 from service.telegram_service import (
     send_device_down_alert, 
     send_device_up_alert,
     send_bandwidth_alert,
-    send_monitoring_summary
+    send_monitoring_summary,
+    send_wifi_client_alert
 )
-from service.zabbix_service import ZabbixAPI
 
 # --- Load Environment Variables
 load_dotenv()
@@ -31,7 +31,6 @@ CORS(app)
 
 # Register Blueprints
 app.register_blueprint(devices_bp, url_prefix='/api')
-app.register_blueprint(monitoring_bp, url_prefix='/api')
 
 # snmp
 def get_snmp_value(ip, community, oid):
@@ -153,23 +152,59 @@ def monitor_bandwidth():
             print(f"❌ Error monitoring {device['name']}: {e}")
 
 
-# --- Check Zabbix triggers
-def check_zabbix_triggers():
-    print(f"[{datetime.now()}] 🔍 Checking Zabbix triggers...")
+# --- Monitor WiFi clients
+def monitor_wifi_clients():
+    print(f"[{datetime.now()}] 📡 Monitoring WiFi clients...")
     
     try:
-        from service.telegram_service import send_zabbix_trigger_alert
-        zabbix = ZabbixAPI()
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM devices WHERE device_type='wifi_ap' AND status='up'")
+        wifi_devices = cursor.fetchall()
         
-        if zabbix.authenticate():
-            triggers = zabbix.get_triggers(min_severity=3)  # High and above
-            
-            for trigger in triggers:
-                # You might want to store trigger IDs to avoid duplicate alerts
-                print(f"⚠️ Zabbix trigger: {trigger.get('description')}")
-                send_zabbix_trigger_alert(trigger)
+        community = os.getenv('SNMP_COMMUNITY', 'public')
+        
+        for device in wifi_devices:
+            try:
+                # Get WiFi client count
+                clients = get_wifi_clients(device['ip_address'], community)
+                
+                if clients is not None:
+                    # Store client count
+                    cursor.execute("""
+                        INSERT INTO wifi_client_history (device_id, client_count, timestamp)
+                        VALUES (%s, %s, %s)
+                    """, (device['id'], clients, datetime.now()))
+                    conn.commit()
+                    
+                    # Check if client count dropped significantly
+                    cursor.execute("""
+                        SELECT client_count FROM wifi_client_history
+                        WHERE device_id=%s AND timestamp > %s
+                        ORDER BY timestamp DESC LIMIT 5
+                    """, (device['id'], datetime.now() - timedelta(minutes=30)))
+                    
+                    history = cursor.fetchall()
+                    if len(history) > 1:
+                        avg_clients = sum(h['client_count'] for h in history) / len(history)
+                        if clients < avg_clients * 0.5:  # Drop 50%
+                            send_wifi_client_alert(
+                                device['name'],
+                                device['ip_address'],
+                                clients,
+                                int(avg_clients)
+                            )
+                    
+                    print(f"📡 {device['name']}: {clients} clients connected")
+                    
+            except Exception as e:
+                print(f"❌ Error monitoring WiFi on {device['name']}: {e}")
+        
+        cursor.close()
+        conn.close()
+        
     except Exception as e:
-        print(f"❌ Error checking Zabbix triggers: {e}")
+        print(f"❌ Error in WiFi monitoring: {e}")
 
 
 # --- Send periodic summary
@@ -319,6 +354,166 @@ def delete_device(id):
     conn.close()
     return jsonify({"message": "Device deleted successfully"})
 
+# --- WiFi Monitoring Routes
+@app.route("/api/wifi/clients/<int:device_id>", methods=["GET"])
+def get_wifi_clients_api(device_id):
+    """Get current WiFi clients for an Access Point"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM devices WHERE id=%s AND device_type='wifi_ap'", (device_id,))
+        device = cursor.fetchone()
+        
+        if not device:
+            return jsonify({"error": "WiFi AP not found"}), 404
+        
+        community = os.getenv('SNMP_COMMUNITY', 'public')
+        clients = get_wifi_clients(device['ip_address'], community)
+        
+        cursor.close()
+        conn.close()
+        
+        if clients is not None:
+            return jsonify({
+                "success": True,
+                "device": device,
+                "client_count": clients,
+                "timestamp": datetime.now().isoformat()
+            })
+        else:
+            return jsonify({"error": "Could not retrieve WiFi client data"}), 500
+            
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/wifi/history/<int:device_id>", methods=["GET"])
+def get_wifi_history(device_id):
+    """Get WiFi client history for past 24 hours"""
+    try:
+        hours = request.args.get('hours', 24, type=int)
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("""
+            SELECT * FROM wifi_client_history
+            WHERE device_id=%s AND timestamp > %s
+            ORDER BY timestamp DESC
+        """, (device_id, datetime.now() - timedelta(hours=hours)))
+        
+        history = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "device_id": device_id,
+            "count": len(history),
+            "history": history
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/bandwidth/history/<int:device_id>", methods=["GET"])
+def get_bandwidth_history(device_id):
+    """Get bandwidth history for device"""
+    try:
+        hours = request.args.get('hours', 24, type=int)
+        
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("""
+            SELECT * FROM bandwidth_history
+            WHERE device_id=%s AND timestamp > %s
+            ORDER BY timestamp DESC
+        """, (device_id, datetime.now() - timedelta(hours=hours)))
+        
+        history = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "device_id": device_id,
+            "count": len(history),
+            "history": history
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/dashboard/summary", methods=["GET"])
+def get_dashboard_summary():
+    """Get dashboard summary data"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Get device stats
+        cursor.execute("SELECT COUNT(*) as total FROM devices")
+        total_devices = cursor.fetchone()['total']
+        
+        cursor.execute("SELECT COUNT(*) as up FROM devices WHERE status='up'")
+        up_devices = cursor.fetchone()['up']
+        
+        # Get WiFi clients
+        cursor.execute("""
+            SELECT SUM(wch.client_count) as total_clients
+            FROM (
+                SELECT device_id, MAX(timestamp) as max_time
+                FROM wifi_client_history
+                WHERE timestamp > %s
+                GROUP BY device_id
+            ) latest
+            JOIN wifi_client_history wch ON wch.device_id = latest.device_id 
+                AND wch.timestamp = latest.max_time
+        """, (datetime.now() - timedelta(minutes=10),))
+        
+        wifi_result = cursor.fetchone()
+        total_wifi_clients = wifi_result['total_clients'] if wifi_result['total_clients'] else 0
+        
+        # Get recent alerts
+        cursor.execute("""
+            SELECT * FROM alert_history
+            ORDER BY created_at DESC
+            LIMIT 10
+        """)
+        recent_alerts = cursor.fetchall()
+        
+        # Get average bandwidth
+        cursor.execute("""
+            SELECT AVG(total_mbps) as avg_bandwidth
+            FROM bandwidth_history
+            WHERE timestamp > %s
+        """, (datetime.now() - timedelta(hours=1),))
+        
+        bw_result = cursor.fetchone()
+        avg_bandwidth = round(bw_result['avg_bandwidth'], 2) if bw_result['avg_bandwidth'] else 0
+        
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "success": True,
+            "summary": {
+                "total_devices": total_devices,
+                "up_devices": up_devices,
+                "down_devices": total_devices - up_devices,
+                "total_wifi_clients": int(total_wifi_clients),
+                "avg_bandwidth_mbps": avg_bandwidth,
+                "recent_alerts": recent_alerts
+            }
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # --- Jalankan pengecekan otomatis
 scheduler = BackgroundScheduler()
 
@@ -328,8 +523,8 @@ scheduler.add_job(func=check_devices_with_alert, trigger="interval", seconds=60)
 # Monitor bandwidth every 5 minutes
 scheduler.add_job(func=monitor_bandwidth, trigger="interval", minutes=5)
 
-# Check Zabbix triggers every 2 minutes
-scheduler.add_job(func=check_zabbix_triggers, trigger="interval", minutes=2)
+# Monitor WiFi clients every 3 minutes
+scheduler.add_job(func=monitor_wifi_clients, trigger="interval", minutes=3)
 
 # Send summary every 6 hours
 scheduler.add_job(func=send_periodic_summary, trigger="interval", hours=6)
@@ -340,7 +535,7 @@ print("✅ NMS System started successfully!")
 print("📊 Scheduled tasks:")
 print("  - Device status check: Every 60 seconds")
 print("  - Bandwidth monitoring: Every 5 minutes")
-print("  - Zabbix trigger check: Every 2 minutes")
+print("  - WiFi client monitoring: Every 3 minutes")
 print("  - Summary report: Every 6 hours")
 
 if __name__ == "__main__":

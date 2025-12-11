@@ -148,3 +148,139 @@ def get_snmp_string(ip, community, oid):
                 return str(varBind[1])
     except Exception as e:
         return None
+
+
+def get_wifi_clients(ip, community='public'):
+    """
+    Mendapatkan jumlah client WiFi yang terhubung
+    Menggunakan SNMP OID standar untuk WiFi AP
+    """
+    # OID untuk jumlah station/client yang terhubung
+    # Ini adalah OID umum, bisa berbeda tergantung vendor
+    
+    # Cisco/Ubiquiti: 1.3.6.1.4.1.14179.2.1.1.1.38
+    # MikroTik: 1.3.6.1.4.1.14988.1.1.1.3.1
+    # TP-Link: 1.3.6.1.4.1.11863.6.4.1.4.1.1.4
+    
+    oids_to_try = [
+        '1.3.6.1.4.1.14179.2.1.1.1.38',  # Cisco
+        '1.3.6.1.4.1.14988.1.1.1.3.1',   # MikroTik wireless registration table
+        '1.3.6.1.2.1.2.2.1.1',           # Generic interface count
+    ]
+    
+    try:
+        # Try MikroTik - count registered clients
+        client_count = 0
+        
+        # Walk the MikroTik wireless registration table
+        for oid in oids_to_try:
+            try:
+                iterator = nextCmd(
+                    SnmpEngine(),
+                    CommunityData(community, mpModel=0),
+                    UdpTransportTarget((ip, 161), timeout=2, retries=1),
+                    ContextData(),
+                    ObjectType(ObjectIdentity(oid)),
+                    lexicographicMode=False
+                )
+                
+                count = 0
+                for errorIndication, errorStatus, errorIndex, varBinds in iterator:
+                    if errorIndication or errorStatus:
+                        break
+                    count += 1
+                    if count > 100:  # Limit to prevent infinite loop
+                        break
+                
+                if count > 0:
+                    return count
+                    
+            except Exception as e:
+                continue
+        
+        # Fallback: try to get from ifNumber or similar
+        fallback_oid = '1.3.6.1.2.1.2.1.0'  # ifNumber
+        value = get_snmp_value(ip, community, fallback_oid)
+        
+        if value:
+            # This is not accurate but gives some indication
+            return max(0, value - 2)  # Subtract typical interfaces (lo, eth0)
+        
+        return 0
+        
+    except Exception as e:
+        print(f"❌ Error getting WiFi clients from {ip}: {e}")
+        return None
+
+
+def get_signal_strength(ip, community='public', client_mac=None):
+    """
+    Mendapatkan signal strength WiFi client
+    """
+    # OID untuk signal strength (dBm)
+    # MikroTik: 1.3.6.1.4.1.14988.1.1.1.2.1.3
+    oid_signal = '1.3.6.1.4.1.14988.1.1.1.2.1.3'
+    
+    try:
+        signals = []
+        iterator = nextCmd(
+            SnmpEngine(),
+            CommunityData(community, mpModel=0),
+            UdpTransportTarget((ip, 161), timeout=2, retries=1),
+            ContextData(),
+            ObjectType(ObjectIdentity(oid_signal)),
+            lexicographicMode=False
+        )
+        
+        for errorIndication, errorStatus, errorIndex, varBinds in iterator:
+            if errorIndication or errorStatus:
+                break
+            for varBind in varBinds:
+                signals.append(int(varBind[1]))
+                
+        if signals:
+            avg_signal = sum(signals) / len(signals)
+            return {
+                'average_signal': round(avg_signal, 1),
+                'min_signal': min(signals),
+                'max_signal': max(signals),
+                'client_count': len(signals)
+            }
+        
+        return None
+        
+    except Exception as e:
+        print(f"❌ Error getting signal strength from {ip}: {e}")
+        return None
+
+
+def scan_network(network_range='192.168.1.0/24'):
+    """
+    Scan network untuk menemukan device yang aktif
+    """
+    import ipaddress
+    
+    active_devices = []
+    
+    try:
+        network = ipaddress.ip_network(network_range, strict=False)
+        
+        print(f"🔍 Scanning network {network_range}...")
+        
+        for ip in network.hosts():
+            ip_str = str(ip)
+            response = ping(ip_str, timeout=1)
+            
+            if response:
+                active_devices.append({
+                    'ip': ip_str,
+                    'latency': round(response * 1000, 2),  # Convert to ms
+                    'status': 'up'
+                })
+                print(f"✅ Found: {ip_str}")
+        
+        return active_devices
+        
+    except Exception as e:
+        print(f"❌ Error scanning network: {e}")
+        return []
