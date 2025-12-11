@@ -8,6 +8,7 @@ import os
 import sys
 from dotenv import load_dotenv
 import requests
+from pysnmp.hlapi import *
 
 # Load environment variables
 load_dotenv()
@@ -39,7 +40,6 @@ def test_snmp(ip="127.0.0.1"):
     """Test SNMP connection"""
     print(f"\n🔍 Testing SNMP Connection to {ip}...")
     try:
-        from pysnmp.hlapi import *
         
         community = os.getenv("SNMP_COMMUNITY", "public")
         oid = "1.3.6.1.2.1.1.1.0"  # sysDescr
