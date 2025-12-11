@@ -114,6 +114,26 @@ def check_devices_with_alert():
     conn.close()
 
 
+# --- Poll data from HTTP API (for fake routers)
+def poll_device_http_api(device):
+    """Poll device data from HTTP API if available"""
+    try:
+        http_port = device.get('http_port', 8080)
+        ip = device['ip_address']
+        
+        # Try to get WiFi info
+        wifi_url = f"http://{ip}:{http_port}/wifi"
+        response = requests.get(wifi_url, timeout=5)
+        
+        if response.status_code == 200:
+            wifi_data = response.json()
+            return wifi_data
+    except Exception as e:
+        pass
+    
+    return None
+
+
 # --- Monitoring bandwidth untuk semua device
 def monitor_bandwidth():
     print(f"[{datetime.now()}] 📊 Monitoring bandwidth...")
@@ -125,17 +145,53 @@ def monitor_bandwidth():
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT * FROM devices WHERE status='up'")
     devices = cursor.fetchall()
-    cursor.close()
-    conn.close()
     
     community = os.getenv('SNMP_COMMUNITY', 'public')
     
     for device in devices:
         try:
-            bandwidth_data = get_interface_bandwidth(device['ip_address'], community)
+            bandwidth_data = None
+            
+            # Try HTTP API first (for fake routers)
+            http_data = poll_device_http_api(device)
+            if http_data and 'bandwidth_usage' in http_data:
+                bandwidth_data = {
+                    'in_mbps': http_data['bandwidth_usage'].get('download_mbps', 0),
+                    'out_mbps': http_data['bandwidth_usage'].get('upload_mbps', 0),
+                    'total_mbps': http_data['bandwidth_usage'].get('total_mbps', 0),
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                # Store WiFi client count if available
+                if 'connected_clients' in http_data:
+                    cursor.execute("""
+                        INSERT INTO wifi_client_history (device_id, client_count, timestamp)
+                        VALUES (%s, %s, %s)
+                    """, (device['id'], http_data['connected_clients'], datetime.now()))
+                
+                print(f"📊 {device['name']}: {bandwidth_data['total_mbps']} Mbps (HTTP API)")
+            
+            # Fallback to SNMP
+            if not bandwidth_data:
+                bandwidth_data = get_interface_bandwidth(device['ip_address'], community)
+                if bandwidth_data:
+                    print(f"📊 {device['name']}: {bandwidth_data['total_mbps']} Mbps (SNMP)")
             
             if bandwidth_data:
                 total_mbps = bandwidth_data.get('total_mbps', 0)
+                
+                # Store bandwidth history
+                cursor.execute("""
+                    INSERT INTO bandwidth_history 
+                    (device_id, in_mbps, out_mbps, total_mbps, timestamp)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    device['id'],
+                    bandwidth_data.get('in_mbps', 0),
+                    bandwidth_data.get('out_mbps', 0),
+                    total_mbps,
+                    datetime.now()
+                ))
                 
                 # Check thresholds
                 if total_mbps > threshold_high:
@@ -146,10 +202,13 @@ def monitor_bandwidth():
                         threshold_high
                     )
                 elif total_mbps < threshold_low and total_mbps > 0:
-                    # Bandwidth too low might indicate problem
                     print(f"⚠️ Low bandwidth detected on {device['name']}: {total_mbps} Mbps")
         except Exception as e:
             print(f"❌ Error monitoring {device['name']}: {e}")
+    
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 # --- Monitor WiFi clients

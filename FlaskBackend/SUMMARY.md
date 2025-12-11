@@ -3,22 +3,28 @@
 ## ✅ Apa yang Sudah Dibuat?
 
 ### 1. **Backend Flask API** ✅
-- ✅ Integrasi Zabbix API lengkap
+- ✅ Monitoring WiFi koneksi dan bandwidth
 - ✅ Monitoring bandwidth via SNMP
+- ✅ Polling data via HTTP API
 - ✅ Notifikasi Telegram dengan template yang informatif
 - ✅ Scheduled monitoring otomatis
 - ✅ RESTful API untuk semua fitur
+- ✅ **Fake Router Simulator** untuk testing tanpa hardware
 
 ### 2. **File yang Dibuat** ✅
 
 #### Kode Aplikasi:
-- `app.py` - Main application dengan scheduler
+- `app.py` - Main application dengan scheduler & HTTP polling
 - `db.py` - Database connection handler
-- `routes/devices.py` - Device management endpoints
-- `routes/monitoring.py` - Monitoring & Zabbix endpoints
-- `service/network_service.py` - SNMP & bandwidth monitoring
-- `service/telegram_service.py` - Telegram notifications
-- `service/zabbix_service.py` - Zabbix API integration
+- `routes/devices.py` - Device management endpoints dengan WiFi monitoring
+- `service/network_service.py` - SNMP & bandwidth monitoring untuk WiFi
+- `service/telegram_service.py` - Telegram notifications untuk WiFi alerts
+
+#### Testing Tools: ⭐
+- `fake_router.py` - Single fake router simulator
+- `fake_multiple_routers.py` - Multiple routers simulator (3 devices)
+- `setup_fake_routers.sh` - Quick setup script Linux/Mac
+- `setup_fake_routers.bat` - Quick setup script Windows
 
 #### Dokumentasi:
 - `README.md` - Dokumentasi lengkap backend
@@ -37,6 +43,9 @@
 - `install.sh` - Installation script Linux/Mac
 - `install.bat` - Installation script Windows
 
+#### Dokumentasi Tambahan:
+- `README_FAKE_ROUTER.md` - Panduan lengkap fake router simulator
+
 ---
 
 ## 🚀 FITUR UTAMA
@@ -50,32 +59,45 @@
 - Alert via Telegram saat device down/up
 ```
 
-### 2. **Bandwidth Monitoring via SNMP**
+### 2. **WiFi Monitoring** ⭐
+```python
+# Monitor koneksi WiFi setiap 5 menit
+- Signal strength monitoring
+- Connected clients count
+- Bandwidth usage (download/upload)
+- Channel & frequency info
+- Client drop detection & alerts
+```
+
+### 3. **Bandwidth Monitoring via SNMP & HTTP**
 ```python
 # Monitor bandwidth setiap 5 menit
-- Real-time traffic in/out
+- Real-time traffic in/out via SNMP
+- HTTP API polling untuk fake routers
 - Konversi ke Mbps
 - Multi-interface support
 - Alert saat bandwidth tinggi/rendah
+- Historical data storage
 ```
 
-### 3. **Integrasi Zabbix**
+### 4. **Fake Router Simulator** 🧪
 ```python
-# Cek Zabbix triggers setiap 2 menit
-- Authenticate ke Zabbix API
-- Get hosts & items
-- Get bandwidth data dari Zabbix
-- Monitor triggers/alerts
-- Sync hosts ke database
+# Testing tanpa hardware fisik
+- 3 fake routers dengan karakteristik berbeda
+- HTTP API endpoints (/status, /wifi, /api/info)
+- Simulasi kondisi jaringan (normal, high traffic, degraded)
+- Web interface untuk setiap router
+- Quick setup scripts
 ```
 
-### 4. **Notifikasi Telegram**
+### 5. **Notifikasi Telegram**
 ```python
 # Alert otomatis untuk:
 - Device down/up
 - Bandwidth threshold exceeded
 - Bandwidth drop
-- Zabbix triggers
+- WiFi client drop detected
+- WiFi signal weak
 - Periodic summary (6 jam)
 ```
 
@@ -123,7 +145,52 @@ Aplikasi akan otomatis menjalankan:
 
 ---
 
-## 🔧 CARA MENGGUNAKAN
+## 🧪 QUICK START DENGAN FAKE ROUTER (TESTING)
+
+### Cara Tercepat untuk Testing:
+
+#### Step 1: Setup Fake Routers
+```bash
+cd FlaskBackend
+
+# Windows:
+setup_fake_routers.bat
+
+# Linux/Mac:
+chmod +x setup_fake_routers.sh
+./setup_fake_routers.sh
+```
+
+Script ini akan:
+- ✅ Start 3 fake routers (port 8081, 8082, 8083)
+- ✅ Add devices ke database
+- ✅ Test koneksi
+
+#### Step 2: Start NMS
+```bash
+python app.py
+```
+
+#### Step 3: Test
+```bash
+# Lihat devices
+curl http://localhost:5000/api/devices
+
+# Lihat bandwidth device 1
+curl http://localhost:5000/api/devices/1/bandwidth
+
+# Lihat WiFi info
+curl http://localhost:5000/api/devices/1/wifi
+```
+
+**Fake routers tersedia di:**
+- Router-Office-1: http://localhost:8081
+- Router-Office-2: http://localhost:8082
+- AP-Meeting-Room: http://localhost:8083
+
+---
+
+## 🔧 CARA MENGGUNAKAN (PRODUCTION)
 
 ### 1. Install Dependencies
 ```bash
